@@ -1,0 +1,26 @@
+# Binary
+gateway-proxy
+gateway-proxy-cgo
+gateway-proxy-test
+gateway-proxy-linux
+
+# Config (use config.yaml.example as template)
+config.yaml
+
+# Database
+*.db
+*.db-shm
+*.db-wal
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Backup
+*.bak
