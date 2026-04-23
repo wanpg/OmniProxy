@@ -293,21 +293,87 @@ EOF
     ok "服务已注册（未自动启动，请先编辑配置）"
 }
 
+# ── 服务管理 ──
+svc_cmd() {
+    if [[ "$PLATFORM" == "macos" ]]; then
+        case "$1" in
+            start)
+                launchctl load "$HOME/Library/LaunchAgents/com.omniproxy.plist" 2>/dev/null
+                ;;
+            stop)
+                launchctl unload "$HOME/Library/LaunchAgents/com.omniproxy.plist" 2>/dev/null
+                ;;
+            restart)
+                launchctl unload "$HOME/Library/LaunchAgents/com.omniproxy.plist" 2>/dev/null
+                sleep 1
+                launchctl load "$HOME/Library/LaunchAgents/com.omniproxy.plist" 2>/dev/null
+                ;;
+            status)
+                if launchctl list "$SERVICE_NAME" &>/dev/null 2>&1; then
+                    ok "$SERVICE_NAME 正在运行"
+                else
+                    warn "$SERVICE_NAME 未运行"
+                fi
+                return
+                ;;
+        esac
+        ok "$SERVICE_NAME 已 $1"
+    else
+        sudo systemctl "$1" "$SERVICE_NAME"
+    fi
+}
+
+do_start()   { info "启动 $SERVICE_NAME..."; svc_cmd start; }
+do_stop()    { info "停止 $SERVICE_NAME..."; svc_cmd stop; }
+do_restart() { info "重启 $SERVICE_NAME..."; svc_cmd restart; }
+do_status()  { svc_cmd status; }
+
+do_log() {
+    if [[ "$PLATFORM" == "macos" ]]; then
+        tail -f /tmp/omniproxy.log
+    else
+        sudo journalctl -u "$SERVICE_NAME" -f
+    fi
+}
+
+# ── 前台运行（调试用） ──
+do_run() {
+    if [[ ! -f "$INSTALL_DIR/$BINARY" ]]; then
+        fail "未找到 $INSTALL_DIR/$BINARY，请先运行: $0 install"
+    fi
+    info "前台启动 OmniProxy（Ctrl+C 退出）..."
+    cd "$INSTALL_DIR" && exec "./$BINARY"
+}
+
 # ── 主入口 ──
 case "${1:-install}" in
     install)   do_install ;;
     update)    do_update ;;
+    start)     do_start ;;
+    stop)      do_stop ;;
+    restart)   do_restart ;;
+    status)    do_status ;;
+    log)       do_log ;;
+    run)       do_run ;;
     docker)    do_docker ;;
     uninstall) do_uninstall ;;
     *)
-        echo "OmniProxy 安装脚本 ($OS/$GOARCH)"
+        echo "OmniProxy 管理脚本 ($OS/$GOARCH)"
         echo ""
         echo "用法: $0 <command>"
         echo ""
-        echo "Commands:"
-        echo "  install    安装（默认）— 克隆、编译、注册系统服务"
+        echo "安装/部署:"
+        echo "  install    克隆、编译、注册系统服务"
         echo "  update     更新代码并重启服务"
         echo "  docker     Docker 部署"
         echo "  uninstall  卸载"
+        echo ""
+        echo "服务管理:"
+        echo "  start      启动服务"
+        echo "  stop       停止服务"
+        echo "  restart    重启服务"
+        echo "  status     查看状态"
+        echo "  log        查看实时日志"
+        echo "  run        前台运行（调试）"
         ;;
 esac
