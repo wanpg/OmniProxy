@@ -1,4 +1,4 @@
-package main
+package db
 
 import (
 	"database/sql"
@@ -8,18 +8,17 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-// DB 全局数据库连接
-var DB *sql.DB
+// Global 全局数据库连接
+var Global *sql.DB
 
-// InitDB 初始化数据库
-func InitDB(path string) error {
+// Init 初始化数据库
+func Init(path string) error {
 	var err error
-	DB, err = sql.Open("sqlite3", path)
+	Global, err = sql.Open("sqlite3", path)
 	if err != nil {
 		return err
 	}
 
-	// 创建表
 	schema := `
 	CREATE TABLE IF NOT EXISTS requests (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -34,19 +33,64 @@ func InitDB(path string) error {
 		status_code INTEGER DEFAULT 0,
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	);
-
 	CREATE INDEX IF NOT EXISTS idx_requests_key_hash ON requests(key_hash);
 	CREATE INDEX IF NOT EXISTS idx_requests_created_at ON requests(created_at);
 	CREATE INDEX IF NOT EXISTS idx_requests_provider ON requests(provider);
 	`
-
-	_, err = DB.Exec(schema)
+	_, err = Global.Exec(schema)
 	return err
 }
 
-// LogRequest 记录请求
-func LogRequest(log *RequestLog) error {
-	_, err := DB.Exec(`
+// RequestLog 请求日志
+type RequestLog struct {
+	KeyHash          string
+	KeyAlias         string
+	Provider         string
+	Model            string
+	PromptTokens     int
+	CompletionTokens int
+	TotalTokens      int
+	LatencyMs        int
+	StatusCode       int
+	CreatedAt        time.Time
+}
+
+// StatsResponse 统计响应
+type StatsResponse struct {
+	Summary Summary     `json:"summary"`
+	ByKey   []KeyStats  `json:"by_key"`
+	ByModel []ModelStats `json:"by_model"`
+}
+
+// Summary 汇总统计
+type Summary struct {
+	TotalRequests         int `json:"total_requests"`
+	TotalPromptTokens     int `json:"total_prompt_tokens"`
+	TotalCompletionTokens int `json:"total_completion_tokens"`
+	TotalTokens           int `json:"total_tokens"`
+}
+
+// KeyStats 按 Key 统计
+type KeyStats struct {
+	KeyAlias         string `json:"key_alias"`
+	Provider         string `json:"provider"`
+	Requests         int    `json:"requests"`
+	PromptTokens     int    `json:"prompt_tokens"`
+	CompletionTokens int    `json:"completion_tokens"`
+	TotalTokens      int    `json:"total_tokens"`
+}
+
+// ModelStats 按模型统计
+type ModelStats struct {
+	Model       string `json:"model"`
+	Provider    string `json:"provider"`
+	Requests    int    `json:"requests"`
+	TotalTokens int    `json:"total_tokens"`
+}
+
+// Record 记录请求
+func Record(log *RequestLog) error {
+	_, err := Global.Exec(`
 		INSERT INTO requests (key_hash, key_alias, provider, model, prompt_tokens, completion_tokens, total_tokens, latency_ms, status_code, created_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, log.KeyHash, log.KeyAlias, log.Provider, log.Model, log.PromptTokens, log.CompletionTokens, log.TotalTokens, log.LatencyMs, log.StatusCode, log.CreatedAt)
@@ -55,7 +99,6 @@ func LogRequest(log *RequestLog) error {
 
 // GetStats 获取统计数据
 func GetStats(key string, provider string, days int) (*StatsResponse, error) {
-	// 构建查询条件
 	conditions := "WHERE created_at >= datetime('now', ?)"
 	args := []interface{}{"-" + itoa(days) + " days"}
 
@@ -68,9 +111,8 @@ func GetStats(key string, provider string, days int) (*StatsResponse, error) {
 		args = append(args, provider)
 	}
 
-	// 汇总
 	var summary Summary
-	err := DB.QueryRow(`
+	err := Global.QueryRow(`
 		SELECT COUNT(*), COALESCE(SUM(prompt_tokens),0), COALESCE(SUM(completion_tokens),0), COALESCE(SUM(total_tokens),0)
 		FROM requests `+conditions, args...).
 		Scan(&summary.TotalRequests, &summary.TotalPromptTokens, &summary.TotalCompletionTokens, &summary.TotalTokens)
@@ -78,8 +120,7 @@ func GetStats(key string, provider string, days int) (*StatsResponse, error) {
 		return nil, err
 	}
 
-	// 按 Key 统计
-	rows, err := DB.Query(`
+	rows, err := Global.Query(`
 		SELECT key_alias, provider, COUNT(*), COALESCE(SUM(prompt_tokens),0), COALESCE(SUM(completion_tokens),0), COALESCE(SUM(total_tokens),0)
 		FROM requests `+conditions+`
 		GROUP BY key_alias, provider
@@ -99,8 +140,7 @@ func GetStats(key string, provider string, days int) (*StatsResponse, error) {
 		byKey = append(byKey, s)
 	}
 
-	// 按 Model 统计
-	rows2, err := DB.Query(`
+	rows2, err := Global.Query(`
 		SELECT model, provider, COUNT(*), COALESCE(SUM(total_tokens),0)
 		FROM requests `+conditions+`
 		GROUP BY model, provider
@@ -127,7 +167,15 @@ func GetStats(key string, provider string, days int) (*StatsResponse, error) {
 	}, nil
 }
 
-// itoa 简单 int to string
+// AtoiSafe 安全字符串转整数
+func AtoiSafe(s string) int {
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return 0
+	}
+	return n
+}
+
 func itoa(i int) string {
 	if i == 0 {
 		return "0"
@@ -148,17 +196,4 @@ func itoa(i int) string {
 		b[n] = '-'
 	}
 	return string(b[n:])
-}
-
-func atoiSafe(s string) int {
-	n, err := strconv.Atoi(s)
-	if err != nil {
-		return 0
-	}
-	return n
-}
-
-// Now 获取当前时间
-func Now() time.Time {
-	return time.Now()
 }

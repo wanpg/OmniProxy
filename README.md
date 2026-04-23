@@ -1,6 +1,6 @@
 # OmniProxy
 
-A lightweight LLM gateway proxy written in Go. Unified OpenAI-compatible API for multiple providers.
+A lightweight multi-provider LLM proxy written in Go. Unified OpenAI-compatible API for multiple providers.
 
 ## Features
 
@@ -20,10 +20,10 @@ A lightweight LLM gateway proxy written in Go. Unified OpenAI-compatible API for
 
 ```bash
 # Standard build
-go build -o gateway-proxy .
+go build -o omniproxy .
 
 # CGO build (for SQLite)
-CGO_ENABLED=1 go build -o gateway-proxy-cgo .
+CGO_ENABLED=1 go build -o omniproxy .
 ```
 
 ### Docker
@@ -45,7 +45,7 @@ cp config.yaml.example config.yaml
 ### Run
 
 ```bash
-./gateway-proxy
+./omniproxy
 ```
 
 The proxy starts on `:8080` and exposes:

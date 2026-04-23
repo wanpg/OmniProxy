@@ -1,4 +1,4 @@
-package main
+package provider
 
 import (
 	"bytes"
@@ -13,6 +13,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"gateway-proxy/config"
+	"gateway-proxy/db"
 )
 
 const (
@@ -21,8 +24,8 @@ const (
 	codexOpenAIBeta     = "responses_websockets=2026-02-06"
 )
 
-// codexPool is the global account pool, initialized from config
-var codexPool *AccountPool
+// CodexPool is the global account pool, initialized from config
+var CodexPool *AccountPool
 
 // codexAuthFile is the path to Codex CLI auth file
 var codexAuthFile string
@@ -46,8 +49,8 @@ type CodexAuthTokens struct {
 // 1. config.yaml accounts array
 // 2. config.yaml api_key
 // 3. ~/.codex/auth.json (Codex CLI auth file)
-func initCodexPool() {
-	provider := globalConfig.GetProvider("codex")
+func InitCodex() {
+	provider := config.Global.GetProvider("codex")
 	if provider == nil {
 		log.Println("[Codex] No codex provider configured, skipping")
 		return
@@ -55,38 +58,38 @@ func initCodexPool() {
 
 	// 1. Try config.yaml accounts array
 	if len(provider.Accounts) > 0 {
-		codexPool = NewAccountPool(provider.Accounts)
+		CodexPool = NewAccountPool(provider.Accounts)
 		log.Printf("[Codex] Loaded %d accounts from config.yaml", len(provider.Accounts))
 	}
 
 	// 2. Try config.yaml api_key
-	if codexPool == nil && provider.APIKey != "" && !strings.HasPrefix(provider.APIKey, "your-") {
-		codexPool = NewAccountPool([]CodexAccount{
+	if CodexPool == nil && provider.APIKey != "" && !strings.HasPrefix(provider.APIKey, "your-") {
+		CodexPool = NewAccountPool([]config.CodexAccount{
 			{AccessToken: provider.APIKey},
 		})
 		log.Println("[Codex] Loaded 1 account from config.yaml api_key")
 	}
 
 	// 3. Try ~/.codex/auth.json (Codex CLI auth file)
-	if codexPool == nil {
+	if CodexPool == nil {
 		home, err := os.UserHomeDir()
 		if err == nil {
 			p := filepath.Join(home, ".codex", "auth.json")
 			if acc, err := loadCodexAuthFile(p); err == nil {
-				codexPool = NewAccountPool([]CodexAccount{*acc})
+				CodexPool = NewAccountPool([]config.CodexAccount{*acc})
 				codexAuthFile = p
 				log.Printf("[Codex] Loaded account from %s (account_id: %s)", p, acc.AccountID)
 			}
 	}
 	}
 
-	if codexPool != nil {
-		log.Printf("[Codex] Account pool initialized: %s", codexPool.Summary())
+	if CodexPool != nil {
+		log.Printf("[Codex] Account pool initialized: %s", CodexPool.Summary())
 	}
 }
 
 // loadCodexAuthFile reads and parses the Codex CLI auth.json file
-func loadCodexAuthFile(path string) (*CodexAccount, error) {
+func loadCodexAuthFile(path string) (*config.CodexAccount, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read auth.json: %w", err)
@@ -101,7 +104,7 @@ func loadCodexAuthFile(path string) (*CodexAccount, error) {
 		return nil, fmt.Errorf("auth.json has no access_token")
 	}
 
-	return &CodexAccount{
+	return &config.CodexAccount{
 		AccessToken:  auth.Tokens.AccessToken,
 		RefreshToken: auth.Tokens.RefreshToken,
 		AccountID:    auth.Tokens.AccountID,
@@ -124,10 +127,10 @@ func refreshCodexToken() error {
 	}
 
 	// Reload from auth file
-	if codexAuthFile != "" && codexPool != nil {
+	if codexAuthFile != "" && CodexPool != nil {
 		if acc, err := loadCodexAuthFile(codexAuthFile); err == nil {
 			// Update the first active account
-			codexPool.UpdateToken(0, acc.AccessToken)
+			CodexPool.UpdateToken(0, acc.AccessToken)
 			log.Println("[Codex] Token refreshed via codex CLI")
 		}
 	}
@@ -136,7 +139,7 @@ func refreshCodexToken() error {
 }
 
 // getCodexBaseURL returns the Codex API base URL from provider config or default
-func getCodexBaseURL(provider *Provider) string {
+func getCodexBaseURL(provider *config.Provider) string {
 	if provider.APIBase != "" {
 		return provider.APIBase
 	}
@@ -146,7 +149,7 @@ func getCodexBaseURL(provider *Provider) string {
 // handleCodexProxy handles requests for the codex provider.
 // It converts Chat Completions format to Codex Responses API format,
 // forwards to chatgpt.com, and converts the response back.
-func handleCodexProxy(w http.ResponseWriter, r *http.Request, provider *Provider, alias string, hash string, model string, body []byte) {
+func HandleCodexProxy(w http.ResponseWriter, r *http.Request, provider *config.Provider, alias string, hash string, model string, body []byte) {
 	start := time.Now()
 
 	// 1. Parse the Chat Completions request
@@ -161,8 +164,8 @@ func handleCodexProxy(w http.ResponseWriter, r *http.Request, provider *Provider
 	var accountID string
 	var accountEntryID string
 
-	if codexPool != nil {
-		entry := codexPool.Acquire()
+	if CodexPool != nil {
+		entry := CodexPool.Acquire()
 		if entry == nil {
 			writeJSONError(w, http.StatusServiceUnavailable, "No available Codex accounts")
 			return
@@ -219,7 +222,7 @@ func handleCodexProxy(w http.ResponseWriter, r *http.Request, provider *Provider
 	}
 
 	// 5. Send request
-	resp, err := httpClient.Do(httpReq)
+	resp, err := HTTPClient.Do(httpReq)
 	if err != nil {
 		writeJSONError(w, http.StatusBadGateway, "Upstream request failed: "+err.Error())
 		return
@@ -258,7 +261,7 @@ func handleCodexProxy(w http.ResponseWriter, r *http.Request, provider *Provider
 
 		// Release account (not rate limited since we got 200)
 		if accountEntryID != "" {
-			codexPool.Release(accountEntryID, false, 0)
+			CodexPool.Release(accountEntryID, false, 0)
 		}
 	} else {
 		// Non-streaming: collect full response
@@ -285,7 +288,7 @@ func handleCodexProxy(w http.ResponseWriter, r *http.Request, provider *Provider
 		logCodexRequest(alias, hash, "codex", model, promptTokens, completionTokens, totalTokens, start, http.StatusOK)
 
 		if accountEntryID != "" {
-			codexPool.Release(accountEntryID, false, 0)
+			CodexPool.Release(accountEntryID, false, 0)
 		}
 	}
 }
@@ -302,14 +305,14 @@ func handleCodexError(w http.ResponseWriter, resp *http.Response, accountEntryID
 	switch resp.StatusCode {
 	case http.StatusUnauthorized:
 		// Token expired — try refresh first
-		if accountEntryID != "" && codexPool != nil {
+		if accountEntryID != "" && CodexPool != nil {
 			log.Printf("[Codex] Account %s token expired, attempting refresh...", accountEntryID)
 			if refreshErr := refreshCodexToken(); refreshErr == nil {
 				log.Printf("[Codex] Token refresh succeeded, retry is not automatic — client should retry")
 			} else {
 				log.Printf("[Codex] Token refresh failed: %v", refreshErr)
 			}
-			codexPool.MarkExpired(accountEntryID)
+			CodexPool.MarkExpired(accountEntryID)
 		}
 		writeJSONError(w, http.StatusBadGateway, "Codex token expired")
 		log.Printf("[Codex] 401 Unauthorized: %s", bodyStr)
@@ -322,8 +325,8 @@ func handleCodexError(w http.ResponseWriter, resp *http.Response, accountEntryID
 				retryAfter = sec
 			}
 		}
-		if accountEntryID != "" && codexPool != nil {
-			codexPool.Release(accountEntryID, true, retryAfter)
+		if accountEntryID != "" && CodexPool != nil {
+			CodexPool.Release(accountEntryID, true, retryAfter)
 			log.Printf("[Codex] Account %s rate limited for %ds", accountEntryID, retryAfter)
 		}
 		w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
@@ -354,7 +357,7 @@ func writeJSONError(w http.ResponseWriter, statusCode int, message string) {
 func logCodexRequest(alias, hash, provider, model string, promptTokens, completionTokens, totalTokens int, start time.Time, statusCode int) {
 	latencyMs := int(time.Since(start).Milliseconds())
 	go func() {
-		reqLog := &RequestLog{
+		reqLog := &db.RequestLog{
 			KeyHash:          hash,
 			KeyAlias:         alias,
 			Provider:         provider,
@@ -364,9 +367,9 @@ func logCodexRequest(alias, hash, provider, model string, promptTokens, completi
 			TotalTokens:      totalTokens,
 			LatencyMs:        latencyMs,
 			StatusCode:       statusCode,
-			CreatedAt:        Now(),
+			CreatedAt:        time.Now(),
 		}
-		if err := LogRequest(reqLog); err != nil {
+		if err := db.Record(reqLog); err != nil {
 			log.Printf("[Codex] Failed to log request: %v", err)
 		}
 	}()

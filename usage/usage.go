@@ -1,10 +1,13 @@
-package main
+package usage
 
 import (
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"time"
+
+	"gateway-proxy/config"
+	"gateway-proxy/provider"
 )
 
 // ─── Response types for the /admin/usage API ───
@@ -117,23 +120,14 @@ type zhipuLimit struct {
 // ─── Provider usage fetchers ───
 
 func fetchCodexUsage() ProviderUsage {
-	if codexPool == nil {
+	if provider.CodexPool == nil {
 		return ProviderUsage{Status: "not_configured"}
 	}
 
-	// Get the first active account
-	entry := codexPool.Acquire()
+	// Get any account for querying usage (not a real request)
+	entry := provider.CodexPool.GetAnyAccount()
 	if entry == nil {
-		// Fall back to any account for querying usage
-		codexPool.mu.RLock()
-		defer codexPool.mu.RUnlock()
-		if len(codexPool.accounts) == 0 {
-			return ProviderUsage{Status: "not_configured"}
-		}
-		entry = &codexPool.accounts[0]
-	} else {
-		// Release immediately — this is just a usage query, not a real request
-		codexPool.Release(entry.ID, false, 0)
+		return ProviderUsage{Status: "not_configured"}
 	}
 
 	req, err := http.NewRequest("GET", "https://chatgpt.com/backend-api/wham/usage", nil)
@@ -146,7 +140,7 @@ func fetchCodexUsage() ProviderUsage {
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0")
 
-	resp, err := httpClient.Do(req)
+	resp, err := provider.HTTPClient.Do(req)
 	if err != nil {
 		return ProviderUsage{Status: "error", Error: err.Error()}
 	}
@@ -175,8 +169,8 @@ func fetchCodexUsage() ProviderUsage {
 }
 
 func fetchMiniMaxUsage() ProviderUsage {
-	provider := globalConfig.GetProvider("minimax")
-	if provider == nil || provider.APIKey == "" {
+	prov := config.Global.GetProvider("minimax")
+	if prov == nil || prov.APIKey == "" {
 		return ProviderUsage{Status: "not_configured"}
 	}
 
@@ -184,9 +178,9 @@ func fetchMiniMaxUsage() ProviderUsage {
 	if err != nil {
 		return ProviderUsage{Status: "error", Error: err.Error()}
 	}
-	req.Header.Set("Authorization", "Bearer "+provider.APIKey)
+	req.Header.Set("Authorization", "Bearer "+prov.APIKey)
 
-	resp, err := httpClient.Do(req)
+	resp, err := provider.HTTPClient.Do(req)
 	if err != nil {
 		return ProviderUsage{Status: "error", Error: err.Error()}
 	}
@@ -234,8 +228,8 @@ func fetchMiniMaxUsage() ProviderUsage {
 }
 
 func fetchZhipuUsage() ProviderUsage {
-	provider := globalConfig.GetProvider("zhipu")
-	if provider == nil || provider.APIKey == "" {
+	prov := config.Global.GetProvider("zhipu")
+	if prov == nil || prov.APIKey == "" {
 		return ProviderUsage{Status: "not_configured"}
 	}
 
@@ -243,9 +237,9 @@ func fetchZhipuUsage() ProviderUsage {
 	if err != nil {
 		return ProviderUsage{Status: "error", Error: err.Error()}
 	}
-	req.Header.Set("Authorization", "Bearer "+provider.APIKey)
+	req.Header.Set("Authorization", "Bearer "+prov.APIKey)
 
-	resp, err := httpClient.Do(req)
+	resp, err := provider.HTTPClient.Do(req)
 	if err != nil {
 		return ProviderUsage{Status: "error", Error: err.Error()}
 	}
@@ -306,9 +300,9 @@ func fetchZhipuUsage() ProviderUsage {
 
 // ─── Handler ───
 
-func handleUsageAPI(w http.ResponseWriter, r *http.Request) {
-	authKey := extractAPIKey(r)
-	if !globalConfig.IsAdminKey(authKey) {
+func HandleUsage(w http.ResponseWriter, r *http.Request) {
+	authKey := provider.ExtractAPIKey(r)
+	if !config.Global.IsAdminKey(authKey) {
 		http.Error(w, `{"error":"Admin key required"}`, http.StatusUnauthorized)
 		return
 	}

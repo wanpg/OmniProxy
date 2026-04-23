@@ -1,68 +1,103 @@
 package main
 
 import (
+	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
-	"os"
-	"time"
+	"strings"
+
+	"gateway-proxy/admin"
+	"gateway-proxy/config"
+	"gateway-proxy/db"
+	"gateway-proxy/provider"
+	"gateway-proxy/usage"
 )
 
 func main() {
-	// 加载配置
-	configPath := "config.yaml"
-	if envPath := os.Getenv("CONFIG_PATH"); envPath != "" {
-		configPath = envPath
-	}
-
-	cfg, err := LoadConfig(configPath)
+	// Load config
+	cfg, err := config.Load("config.yaml")
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
+	config.SetGlobal(cfg)
 
-	// 初始化数据库
-	if err := InitDB(cfg.DBPath); err != nil {
-		log.Fatalf("Failed to init DB: %v", err)
+	// Init database
+	if err := db.Init(cfg.DBPath); err != nil {
+		log.Fatalf("Failed to init database: %v", err)
 	}
 
-	// 设置全局配置
-	setConfig(cfg)
+	// Init Codex pool
+	provider.InitCodex()
 
-	// 初始化 Codex 账号池
-	initCodexPool()
-
-	// 路由设置
+	// Register routes
 	mux := http.NewServeMux()
 
-	// 健康检查
-	mux.HandleFunc("/health", handleHealth)
+	// API routes (auth handled by provider)
+	mux.HandleFunc("POST /v1/chat/completions", provider.HandleChatCompletions)
 
-	// 模型列表（公开）
-	mux.HandleFunc("/v1/models", handleModels)
+	// Admin routes
+	mux.HandleFunc("GET /admin/stats", admin.HandleStats)
+	mux.HandleFunc("GET /admin/usage", usage.HandleUsage)
+	mux.HandleFunc("GET /admin/ui", admin.HandleUI)
+	mux.HandleFunc("GET /admin/", admin.HandleUI)
 
-	// Admin 统计（需要 Admin Key）
-	mux.HandleFunc("/admin/stats", handleAdminStats)
-	mux.HandleFunc("/admin/usage", handleUsageAPI)
-	mux.HandleFunc("/admin/ui", handleAdminUI)
+	// Utility routes
+	mux.HandleFunc("GET /health", handleHealth)
+	mux.HandleFunc("GET /v1/models", handleModels)
+	mux.HandleFunc("GET /auth/status", handleAuthStatus)
 
-	// OpenAI 风格聊天接口（需要普通 Key）
-	mux.Handle("/v1/chat/completions", authMiddleware(handleChatCompletions))
-
-	// Anthropic 风格接口
-	mux.Handle("/v1/messages", authMiddleware(handleAnthropicMessages))
-
-	// Anthropic 也支持 /v1/messages Beta 版本
-	mux.Handle("/v1/messages_beta", authMiddleware(handleAnthropicMessages))
-
-	// Codex auth status (Phase 2 OAuth 准备，Phase 1 返回占位)
-	mux.HandleFunc("/auth/status", handleAuthStatus)
-
-	server := &http.Server{
-		Addr:         ":" + cfg.Port,
-		Handler:      mux,
-		ReadTimeout:  120 * time.Second,
-		WriteTimeout: 120 * time.Second,
+	addr := ":" + cfg.Port
+	fmt.Printf("🚀 OmniProxy starting on %s\n", addr)
+	fmt.Printf("   Admin UI: http://localhost%s/admin/ui\n", addr)
+	if err := http.ListenAndServe(addr, mux); err != nil {
+		log.Fatalf("Server failed: %v", err)
 	}
+}
 
-	log.Printf("Gateway Proxy started on :%s", cfg.Port)
-	log.Fatal(server.ListenAndServe())
+func handleHealth(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(`{"status":"ok"}`))
+}
+
+func handleModels(w http.ResponseWriter, r *http.Request) {
+	cfg := config.Global
+	models := []map[string]interface{}{}
+	for name, prov := range cfg.Providers {
+		if prov.AuthType != "codex" && strings.HasPrefix(prov.APIKey, "your-") {
+			continue
+		}
+		for _, model := range prov.Models {
+			models = append(models, map[string]interface{}{
+				"id":       model,
+				"object":   "model",
+				"provider": name,
+				"owned_by": "qimiaobit",
+			})
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"object": "list",
+		"data":   models,
+	})
+}
+
+func handleAuthStatus(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	status := map[string]interface{}{
+		"status":        "not_configured",
+		"oauth_enabled":  false,
+		"accounts":      0,
+		"message":       "Phase 1: OAuth not yet implemented. Use manual access_token in config.yaml.",
+	}
+	if provider.CodexPool != nil {
+		summary := provider.CodexPool.Summary()
+		status["accounts"] = summary["total"]
+		status["active"] = summary["active"]
+		if summary["active"] > 0 {
+			status["status"] = "active"
+		}
+	}
+	json.NewEncoder(w).Encode(status)
 }

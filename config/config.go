@@ -1,4 +1,4 @@
-package main
+package config
 
 import (
 	"crypto/sha256"
@@ -7,6 +7,14 @@ import (
 
 	"gopkg.in/yaml.v3"
 )
+
+// Global 全局配置实例
+var Global *Config
+
+// SetGlobal 设置全局配置
+func SetGlobal(cfg *Config) {
+	Global = cfg
+}
 
 // Config 配置
 type Config struct {
@@ -30,12 +38,12 @@ type CodexAccount struct {
 
 // Provider Provider 配置
 type Provider struct {
-	Name     string        `yaml:"-"` // 由 GetProvider 自动注入
-	APIBase  string        `yaml:"api_base"`
-	APIKey   string        `yaml:"api_key"`
-	Models   []string      `yaml:"models"`
-	AuthType string        `yaml:"auth_type"` // "openai", "anthropic", 或 "codex"
-	Accounts []CodexAccount `yaml:"accounts,omitempty"` // Codex 多账号
+	Name     string         `yaml:"-"`
+	APIBase  string         `yaml:"api_base"`
+	APIKey   string         `yaml:"api_key"`
+	Models   []string       `yaml:"models"`
+	AuthType string         `yaml:"auth_type"` // "openai", "anthropic", "codex"
+	Accounts []CodexAccount `yaml:"accounts,omitempty"`
 }
 
 // KeyConfig Key 路由配置
@@ -46,8 +54,8 @@ type KeyConfig struct {
 	Models   []string `yaml:"models"`
 }
 
-// LoadConfig 加载配置
-func LoadConfig(path string) (*Config, error) {
+// Load 加载配置
+func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -58,7 +66,6 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, err
 	}
 
-	// 默认值
 	if cfg.Port == "" {
 		cfg.Port = "8080"
 	}
@@ -67,7 +74,6 @@ func LoadConfig(path string) (*Config, error) {
 	}
 
 	cfg.buildIndexes()
-
 	return &cfg, nil
 }
 
@@ -78,21 +84,21 @@ func (c *Config) buildIndexes() {
 	}
 
 	modelCount := 0
-	for _, provider := range c.Providers {
-		modelCount += len(provider.Models)
+	for _, p := range c.Providers {
+		modelCount += len(p.Models)
 	}
 	c.modelProviderIndex = make(map[string]string, modelCount)
-	for name, provider := range c.Providers {
-		for _, model := range provider.Models {
-			c.modelProviderIndex[model] = name
+	for name, p := range c.Providers {
+		for _, m := range p.Models {
+			c.modelProviderIndex[m] = name
 		}
 	}
 }
 
-// HashKey 计算 Key 的 Hash（安全存储）
+// HashKey 计算 Key 的 Hash
 func HashKey(key string) string {
 	hash := sha256.Sum256([]byte(key))
-	return hex.EncodeToString(hash[:8]) // 只取前 8 字节，足够识别又不暴露原 Key
+	return hex.EncodeToString(hash[:8])
 }
 
 // FindKeyConfig 根据 Key 查找配置
@@ -113,7 +119,7 @@ func (c *Config) IsAdminKey(key string) bool {
 	return key == c.AdminKey
 }
 
-// GetProvider 获取 Provider 配置（注入 Name）
+// GetProvider 获取 Provider 配置
 func (c *Config) GetProvider(name string) *Provider {
 	p, ok := c.Providers[name]
 	if !ok {
@@ -123,7 +129,7 @@ func (c *Config) GetProvider(name string) *Provider {
 	return &p
 }
 
-// FindProviderByModel 根据 model 名称自动路由到对应 provider
+// FindProviderByModel 根据 model 路由到 provider
 func (c *Config) FindProviderByModel(model string) *Provider {
 	if c.modelProviderIndex != nil {
 		if name, ok := c.modelProviderIndex[model]; ok {
@@ -131,12 +137,12 @@ func (c *Config) FindProviderByModel(model string) *Provider {
 		}
 		return nil
 	}
-	for name, provider := range c.Providers {
-		for _, m := range provider.Models {
+	for name, p := range c.Providers {
+		for _, m := range p.Models {
 			if m == model {
-				p := provider
-				p.Name = name
-				return &p
+				cp := p
+				cp.Name = name
+				return &cp
 			}
 		}
 	}
@@ -146,7 +152,7 @@ func (c *Config) FindProviderByModel(model string) *Provider {
 // IsValidModel 检查模型是否允许
 func (k *KeyConfig) IsValidModel(model string) bool {
 	if len(k.Models) == 0 {
-		return true // 空数组表示不限制
+		return true
 	}
 	for _, m := range k.Models {
 		if m == model {

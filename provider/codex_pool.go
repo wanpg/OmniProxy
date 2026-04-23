@@ -1,9 +1,11 @@
-package main
+package provider
 
 import (
 	"fmt"
 	"sync"
 	"time"
+
+	"gateway-proxy/config"
 )
 
 // AccountEntry represents a single Codex account in the pool
@@ -26,7 +28,7 @@ type AccountPool struct {
 }
 
 // NewAccountPool creates an account pool from config entries
-func NewAccountPool(accounts []CodexAccount) *AccountPool {
+func NewAccountPool(accounts []config.CodexAccount) *AccountPool {
 	pool := &AccountPool{}
 	now := time.Now()
 	for i, acc := range accounts {
@@ -153,6 +155,19 @@ func (p *AccountPool) GetActiveCount() int {
 		}
 	}
 	return count
+}
+
+// GetAnyAccount returns any account from the pool (for usage queries, not real requests)
+func (p *AccountPool) GetAnyAccount() *AccountEntry {
+	if p == nil {
+		return nil
+	}
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	if len(p.accounts) == 0 {
+		return nil
+	}
+	return &p.accounts[0]
 }
 
 // Summary returns a summary of the pool status
