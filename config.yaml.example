@@ -36,13 +36,6 @@ providers:
       - "claude-3-5-sonnet-latest"
       - "claude-3-haiku-latest"
 
-  # Codex (ChatGPT Plus/Pro) — auto-reads ~/.codex/auth.json
-  codex:
-    api_base: "https://chatgpt.com/backend-api/codex"
-    models:
-      - "gpt-5.4"
-    auth_type: "codex"
-
 # Key 路由配置
 keys:
   - key: "sk-user1-minimax"

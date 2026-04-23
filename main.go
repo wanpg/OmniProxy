@@ -41,6 +41,7 @@ func main() {
 
 	// Admin 统计（需要 Admin Key）
 	mux.HandleFunc("/admin/stats", handleAdminStats)
+	mux.HandleFunc("/admin/usage", handleUsageAPI)
 	mux.HandleFunc("/admin/ui", handleAdminUI)
 
 	// OpenAI 风格聊天接口（需要普通 Key）
