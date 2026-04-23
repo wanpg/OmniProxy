@@ -16,14 +16,26 @@ A lightweight multi-provider LLM proxy written in Go. Unified OpenAI-compatible 
 
 ## Quick Start
 
-### Build
+### 一键安装
 
 ```bash
-# Standard build
-go build -o omniproxy .
+curl -fsSL https://raw.githubusercontent.com/wanpg/OmniProxy/main/bootstrap.sh | bash
+```
 
-# CGO build (for SQLite)
-CGO_ENABLED=1 go build -o omniproxy .
+也支持手动模式：
+```bash
+git clone https://github.com/wanpg/OmniProxy.git /opt/omniproxy
+cd /opt/omniproxy
+./bootstrap.sh install    # 编译 + 注册 systemd 服务
+./bootstrap.sh docker     # Docker 部署
+./bootstrap.sh update     # 更新代码并重启
+./bootstrap.sh uninstall  # 卸载
+```
+
+### 手动编译
+
+```bash
+go build -o omniproxy .
 ```
 
 ### Docker
