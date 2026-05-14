@@ -112,8 +112,17 @@ func loadCodexAuthFile(path string) (*config.CodexAccount, error) {
 	}, nil
 }
 
-// refreshCodexToken uses `codex auth refresh` to get a new access_token
+// refreshCodexToken refreshes the access_token via OpenAI OAuth endpoint
+// Falls back to codex CLI if HTTP refresh fails
 func refreshCodexToken() error {
+	// Try HTTP refresh first
+	if err := refreshCodexTokenHTTP(); err == nil {
+		return nil
+	} else {
+		log.Printf("[Codex] HTTP refresh failed: %v, trying codex CLI", err)
+	}
+
+	// Fallback to codex CLI
 	codex, err := exec.LookPath("codex")
 	if err != nil {
 		return fmt.Errorf("codex CLI not found in PATH")
@@ -129,10 +138,113 @@ func refreshCodexToken() error {
 	// Reload from auth file
 	if codexAuthFile != "" && CodexPool != nil {
 		if acc, err := loadCodexAuthFile(codexAuthFile); err == nil {
-			// Update the first active account
 			CodexPool.UpdateToken(0, acc.AccessToken)
 			log.Println("[Codex] Token refreshed via codex CLI")
 		}
+	}
+
+	return nil
+}
+
+// refreshCodexTokenHTTP refreshes the Codex access_token using the OpenAI OAuth endpoint
+func refreshCodexTokenHTTP() error {
+	if codexAuthFile == "" || CodexPool == nil {
+		return fmt.Errorf("no auth file or pool initialized")
+	}
+
+	// Read current auth file to get refresh_token
+	acc, err := loadCodexAuthFile(codexAuthFile)
+	if err != nil {
+		return fmt.Errorf("read auth file: %w", err)
+	}
+	if acc.RefreshToken == "" {
+		return fmt.Errorf("no refresh_token available")
+	}
+
+	// Call OpenAI OAuth token endpoint
+	const tokenEndpoint = "https://auth.openai.com/oauth/token"
+	const clientID = "app_EMoamEEZ73f0CkXaXp7hrann"
+
+	payload := map[string]string{
+		"grant_type":    "refresh_token",
+		"refresh_token": acc.RefreshToken,
+		"client_id":     clientID,
+	}
+	body, _ := json.Marshal(payload)
+
+	resp, err := http.Post(tokenEndpoint, "application/json", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("HTTP request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("OAuth returned %d: %s", resp.StatusCode, string(respBody[:min(len(respBody), 200)]))
+	}
+
+	var result struct {
+		AccessToken  string `json:"access_token"`
+		RefreshToken string `json:"refresh_token"`
+		IDToken      string `json:"id_token"`
+		TokenType    string `json:"token_type"`
+		ExpiresIn    int    `json:"expires_in"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return fmt.Errorf("decode response: %w", err)
+	}
+
+	if result.AccessToken == "" {
+		return fmt.Errorf("empty access_token in response")
+	}
+
+	// Update memory pool
+	CodexPool.UpdateToken(0, result.AccessToken)
+
+	// Persist to auth.json
+	if err := persistCodexAuth(result.AccessToken, result.RefreshToken, result.IDToken, acc.AccountID); err != nil {
+		log.Printf("[Codex] WARNING: token refreshed but failed to persist: %v", err)
+	}
+
+	log.Printf("[Codex] Token refreshed via OAuth (expires in %ds)", result.ExpiresIn)
+	return nil
+}
+
+// persistCodexAuth writes updated tokens back to auth.json
+func persistCodexAuth(accessToken, refreshToken, idToken, accountID string) error {
+	if codexAuthFile == "" {
+		return fmt.Errorf("no auth file path")
+	}
+
+	// Read current file
+	data, err := os.ReadFile(codexAuthFile)
+	if err != nil {
+		return fmt.Errorf("read: %w", err)
+	}
+
+	var auth CodexAuthFile
+	if err := json.Unmarshal(data, &auth); err != nil {
+		return fmt.Errorf("parse: %w", err)
+	}
+
+	// Update tokens
+	auth.Tokens.AccessToken = accessToken
+	if refreshToken != "" {
+		auth.Tokens.RefreshToken = refreshToken
+	}
+	if idToken != "" {
+		auth.Tokens.IDToken = idToken
+	}
+	auth.LastRefresh = time.Now().UTC().Format(time.RFC3339Nano)
+
+	// Write back
+	newData, err := json.MarshalIndent(auth, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal: %w", err)
+	}
+
+	if err := os.WriteFile(codexAuthFile, newData, 0600); err != nil {
+		return fmt.Errorf("write: %w", err)
 	}
 
 	return nil
@@ -159,7 +271,14 @@ func HandleCodexProxy(w http.ResponseWriter, r *http.Request, provider *config.P
 		return
 	}
 
-	// 2. Acquire an account
+	// 3. Resolve virtual model (e.g. gpt-5.5-high → gpt-5.5 + reasoning_effort=high)
+	realModel, mappedReasoning := provider.ResolveModel(model)
+	chatReq.Model = realModel
+	if mappedReasoning != "" && chatReq.ReasoningEffort == "" {
+		chatReq.ReasoningEffort = mappedReasoning // model_map default, explicit request takes priority
+	}
+
+	// 4. Acquire an account
 	var accessToken string
 	var accountID string
 	var accountEntryID string

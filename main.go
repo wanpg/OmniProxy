@@ -75,6 +75,15 @@ func handleModels(w http.ResponseWriter, r *http.Request) {
 				"owned_by": "qimiaobit",
 			})
 		}
+		// Also list virtual models from model_map
+		for vm := range prov.ModelMap {
+			models = append(models, map[string]interface{}{
+				"id":       vm,
+				"object":   "model",
+				"provider": name,
+				"owned_by": "qimiaobit",
+			})
+		}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{

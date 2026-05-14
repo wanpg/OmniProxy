@@ -36,14 +36,21 @@ type CodexAccount struct {
 	Label        string `yaml:"label"`
 }
 
+// ModelMapEntry defines a virtual model → real model + defaults
+type ModelMapEntry struct {
+	Model           string `yaml:"model"`            // real model name to send upstream
+	ReasoningEffort string `yaml:"reasoning_effort"` // auto-set reasoning effort
+}
+
 // Provider Provider 配置
 type Provider struct {
-	Name     string         `yaml:"-"`
-	APIBase  string         `yaml:"api_base"`
-	APIKey   string         `yaml:"api_key"`
-	Models   []string       `yaml:"models"`
-	AuthType string         `yaml:"auth_type"` // "openai", "anthropic", "codex"
-	Accounts []CodexAccount `yaml:"accounts,omitempty"`
+	Name     string          `yaml:"-"`
+	APIBase  string          `yaml:"api_base"`
+	APIKey   string          `yaml:"api_key"`
+	Models   []string        `yaml:"models"`
+	AuthType string          `yaml:"auth_type"` // "openai", "anthropic", "codex"
+	Accounts []CodexAccount  `yaml:"accounts,omitempty"`
+	ModelMap map[string]ModelMapEntry `yaml:"model_map,omitempty"` // virtual model mapping
 }
 
 // KeyConfig Key 路由配置
@@ -86,11 +93,16 @@ func (c *Config) buildIndexes() {
 	modelCount := 0
 	for _, p := range c.Providers {
 		modelCount += len(p.Models)
+		modelCount += len(p.ModelMap) // virtual models also count
 	}
 	c.modelProviderIndex = make(map[string]string, modelCount)
 	for name, p := range c.Providers {
 		for _, m := range p.Models {
 			c.modelProviderIndex[m] = name
+		}
+		// Register virtual models from model_map
+		for vm := range p.ModelMap {
+			c.modelProviderIndex[vm] = name
 		}
 	}
 }
@@ -127,6 +139,14 @@ func (c *Config) GetProvider(name string) *Provider {
 	}
 	p.Name = name
 	return &p
+}
+
+// ResolveModel resolves a virtual model to real model + optional reasoning_effort override
+func (p *Provider) ResolveModel(model string) (realModel string, reasoningEffort string) {
+	if entry, ok := p.ModelMap[model]; ok {
+		return entry.Model, entry.ReasoningEffort
+	}
+	return model, "" // pass through
 }
 
 // FindProviderByModel 根据 model 路由到 provider
