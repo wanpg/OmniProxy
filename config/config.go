@@ -1,12 +1,18 @@
 package config
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"os"
+	"sync"
 
 	"gopkg.in/yaml.v3"
 )
+
+// mu protects config mutations (key CRUD + persist)
+var mu sync.Mutex
 
 // Global 全局配置实例
 var Global *Config
@@ -181,3 +187,80 @@ func (k *KeyConfig) IsValidModel(model string) bool {
 	}
 	return false
 }
+
+// MaskKey 脱敏显示 Key：保留前8后4，中间 ****
+func MaskKey(key string) string {
+	if len(key) <= 12 {
+		return "****"
+	}
+	return key[:8] + "****" + key[len(key)-4:]
+}
+
+// GenerateKey 生成随机 API Key
+func GenerateKey() string {
+	b := make([]byte, 16)
+	rand.Read(b)
+	return "sk-qmbit-proxy-" + hex.EncodeToString(b)
+}
+
+// AddKey 新增 key
+func (c *Config) AddKey(kc KeyConfig) error {
+	mu.Lock()
+	defer mu.Unlock()
+	if c.FindKeyConfig(kc.Key) != nil {
+		return fmt.Errorf("key already exists")
+	}
+	c.Keys = append(c.Keys, kc)
+	c.buildIndexes()
+	return nil
+}
+
+// UpdateKeyByAlias 根据 alias 修改 key
+func (c *Config) UpdateKeyByAlias(alias string, newAlias string, provider string, models []string) error {
+	mu.Lock()
+	defer mu.Unlock()
+	for i := range c.Keys {
+		if c.Keys[i].Alias == alias {
+			if alias == "Admin Key" {
+				return fmt.Errorf("cannot modify admin key")
+			}
+			c.Keys[i].Alias = newAlias
+			c.Keys[i].Provider = provider
+			c.Keys[i].Models = models
+			c.buildIndexes()
+			return nil
+		}
+	}
+	return fmt.Errorf("key not found: %s", alias)
+}
+
+// DeleteKeyByAlias 根据 alias 删除 key
+func (c *Config) DeleteKeyByAlias(alias string) error {
+	mu.Lock()
+	defer mu.Unlock()
+	if alias == "Admin Key" {
+		return fmt.Errorf("cannot delete admin key")
+	}
+	for i, k := range c.Keys {
+		if k.Alias == alias {
+			c.Keys = append(c.Keys[:i], c.Keys[i+1:]...)
+			c.buildIndexes()
+			return nil
+		}
+	}
+	return fmt.Errorf("key not found: %s", alias)
+}
+
+// Persist 将配置写回文件
+func (c *Config) Persist(path string) error {
+	mu.Lock()
+	defer mu.Unlock()
+	data, err := yaml.Marshal(c)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0600)
+}
+
+// ConfigPath stores the loaded config file path
+var ConfigPath string

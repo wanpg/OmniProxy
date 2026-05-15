@@ -21,6 +21,7 @@ func main() {
 		log.Fatalf("Failed to load config: %v", err)
 	}
 	config.SetGlobal(cfg)
+	config.ConfigPath = "config.yaml"
 
 	// Init database
 	if err := db.Init(cfg.DBPath); err != nil {
@@ -41,6 +42,13 @@ func main() {
 	mux.HandleFunc("GET /admin/usage", usage.HandleUsage)
 	mux.HandleFunc("GET /admin/ui", admin.HandleUI)
 	mux.HandleFunc("GET /admin/", admin.HandleUI)
+	mux.HandleFunc("GET /admin/auth", admin.HandleAuth)
+	mux.HandleFunc("GET /admin/keys", admin.HandleListKeys)
+	mux.HandleFunc("POST /admin/keys", admin.HandleCreateKey)
+	mux.HandleFunc("PUT /admin/keys/", admin.HandleUpdateKey)
+	mux.HandleFunc("DELETE /admin/keys/", admin.HandleDeleteKey)
+	mux.HandleFunc("GET /admin/user/stats", admin.HandleUserStats)
+	mux.HandleFunc("GET /admin/user/info", admin.HandleUserInfo)
 
 	// Utility routes
 	mux.HandleFunc("GET /health", handleHealth)

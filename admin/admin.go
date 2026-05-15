@@ -73,6 +73,8 @@ h1 span{color:#7c8aff}
 .toolbar input:focus,.toolbar select:focus{border-color:#7c8aff}
 .toolbar button{background:#7c8aff;color:#fff;border:none;padding:8px 18px;border-radius:6px;cursor:pointer;font-size:14px;font-weight:500}
 .toolbar button:hover{background:#6a7ae0}
+.btn-primary{background:#7c8aff;color:#fff;border:none;padding:8px 18px;border-radius:6px;cursor:pointer;font-size:14px;font-weight:500}
+.btn-primary:hover{background:#6a7ae0}
 .tabs{display:flex;gap:0;margin-bottom:24px;border-bottom:1px solid #2a2b3d}
 .tab{padding:10px 20px;cursor:pointer;font-size:14px;font-weight:500;color:#888;border-bottom:2px solid transparent;transition:all .2s}
 .tab:hover{color:#ccc}
@@ -140,6 +142,7 @@ tr:hover td{background:#1e1f30}
 </div>
 <div class="tabs">
   <div class="tab active" data-tab="stats" onclick="switchTab('stats')">📊 统计</div>
+  <div class="tab" data-tab="keys" onclick="switchTab('keys')">🔑 Key 管理</div>
   <div class="tab" data-tab="providers" onclick="switchTab('providers')">🔌 Provider 状态</div>
 </div>
 <div id="error" class="err" style="display:none"></div>
@@ -160,6 +163,13 @@ tr:hover td{background:#1e1f30}
   </div>
   <div id="providersError" class="err" style="display:none"></div>
 </div>
+<div id="keysTab" style="display:none">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+    <h2 style="margin:0">API Keys</h2>
+    <button class="btn-primary" onclick="showKeyModal()">+ 新增 Key</button>
+  </div>
+  <table><thead><tr><th>别名</th><th>Key</th><th>Provider</th><th>模型限制</th><th>操作</th></tr></thead><tbody id="keysBody"></tbody></table>
+</div>
 </div>
 <script>
 var savedKey=localStorage.getItem('gp_admin_key')||'';
@@ -167,7 +177,7 @@ document.getElementById('keyInput').value=savedKey;
 if(savedKey)refresh();
 var usageRefreshTimer=null;
 var currentTab='stats';
-function switchTab(tab){currentTab=tab;document.querySelectorAll('.tab').forEach(function(t){t.classList.toggle('active',t.dataset.tab===tab)});document.getElementById('statsTab').style.display=tab==='stats'?'block':'none';document.getElementById('providersTab').style.display=tab==='providers'?'block':'none';if(tab==='providers'&&savedKey)loadUsage();if(tab!=='providers'&&usageRefreshTimer){clearInterval(usageRefreshTimer);usageRefreshTimer=null;}}
+function switchTab(tab){currentTab=tab;document.querySelectorAll('.tab').forEach(function(t){t.classList.toggle('active',t.dataset.tab===tab)});document.getElementById('statsTab').style.display=tab==='stats'?'block':'none';document.getElementById('providersTab').style.display=tab==='providers'?'block':'none';document.getElementById('keysTab').style.display=tab==='keys'?'block':'none';if(tab==='providers'&&savedKey)loadUsage();if(tab==='keys'&&savedKey)loadKeys();if(tab!=='providers'&&usageRefreshTimer){clearInterval(usageRefreshTimer);usageRefreshTimer=null;}}
 function refresh(){var key=document.getElementById('keyInput').value.trim();if(!key){showErr('请输入 Admin Key');return;}savedKey=key;localStorage.setItem('gp_admin_key',key);loadStats();if(currentTab==='providers')loadUsage();}
 function loadStats(){fetch('/admin/stats?days='+document.getElementById('daysSelect').value,{headers:{'Authorization':'Bearer '+savedKey}}).then(function(r){if(!r.ok)throw new Error(r.status===401?'Admin Key 错误':'请求失败('+r.status+')');return r.json()}).then(function(d){renderStats(d)}).catch(function(e){showErr(e.message)});}
 function loadUsage(){if(usageRefreshTimer){clearInterval(usageRefreshTimer);usageRefreshTimer=null;}fetchUsage();usageRefreshTimer=setInterval(fetchUsage,30000);}
@@ -183,6 +193,14 @@ function buildMetric(label,detailText,pct,resetSec){var color=pct<50?'green':pct
 function fmtTime(sec){if(sec==null||sec<=0)return '0秒';var d=Math.floor(sec/86400);var h=Math.floor((sec%86400)/3600);var m=Math.floor((sec%3600)/60);if(d>0&&h>0)return d+'天'+h+'小时';if(d>0)return d+'天';if(h>0&&m>0)return h+'小时'+m+'分钟';if(h>0)return h+'小时';return m+'分钟';}
 function fmt(n){return(n||0).toLocaleString()}
 function esc(s){var d=document.createElement('div');d.textContent=s||'';return d.innerHTML}
+// Key Management
+function loadKeys(){fetch('/admin/keys',{headers:{'Authorization':'Bearer '+savedKey}}).then(function(r){if(!r.ok)throw new Error(r.status===401?'Admin Key 错误':'请求失败');return r.json()}).then(function(d){renderKeys(d.keys||[])}).catch(function(e){showErr(e.message)});}
+function renderKeys(keys){var b=document.getElementById('keysBody');if(!keys.length){b.innerHTML='<tr><td colspan="5" class="empty">暂无 Key</td></tr>';return;}b.innerHTML=keys.map(function(k){var models=k.models&&k.models.length?k.models.join(', '):'不限制';var adminBadge=k.is_admin?'<span style="color:#fbbf24;font-size:11px;margin-left:6px">⭐ Admin</span>':'';var actions=k.is_admin?'':('<button onclick="editKey(\''+esc(k.alias)+'\')" style="background:#2a2b3d;color:#e4e4e7;border:none;padding:4px 12px;border-radius:4px;cursor:pointer;font-size:13px;margin-right:6px">编辑</button>'+'<button onclick="deleteKey(\''+esc(k.alias)+'\')" style="background:#3a1a1a;color:#fb7185;border:none;padding:4px 12px;border-radius:4px;cursor:pointer;font-size:13px">删除</button>');return '<tr><td>'+esc(k.alias)+adminBadge+'</td><td style="font-family:monospace;font-size:13px;color:#888">'+esc(k.key_masked)+'</td><td>'+( k.provider||'不限制')+'</td><td style="font-size:13px">'+models+'</td><td>'+actions+'</td></tr>';}).join('');}
+function showKeyModal(existing){var m=document.getElementById('keyModal');if(!m){m=document.createElement('div');m.id='keyModal';m.style.cssText='position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;z-index:999';document.body.appendChild(m);}var isEdit=!!existing;m.innerHTML='<div style="background:#1a1b26;border:1px solid #2a2b3d;border-radius:12px;padding:28px;width:420px;max-width:90vw">'+('<h2 style="margin:0 0 20px;font-size:1.1rem;color:#e4e4e7">'+(isEdit?'编辑 Key':'新增 Key')+'</h2>')+'<div style="margin-bottom:14px"><label style="display:block;font-size:13px;color:#888;margin-bottom:6px">别名</label><input id="mAlias" value="'+(existing?esc(existing.alias):'')+'" style="width:100%;background:#0f1117;border:1px solid #2a2b3d;color:#e4e4e7;padding:8px 12px;border-radius:6px;font-size:14px;outline:none"></div>'+'<div style="margin-bottom:14px"><label style="display:block;font-size:13px;color:#888;margin-bottom:6px">Provider 限制</label><input id="mProvider" value="'+(existing?esc(existing.provider||''):'' )+'" placeholder="留空 = 不限制" style="width:100%;background:#0f1117;border:1px solid #2a2b3d;color:#e4e4e7;padding:8px 12px;border-radius:6px;font-size:14px;outline:none"></div>'+'<div style="margin-bottom:20px"><label style="display:block;font-size:13px;color:#888;margin-bottom:6px">模型限制（逗号分隔，留空 = 不限制）</label><input id="mModels" value="'+(existing&&existing.models&&existing.models.length?esc(existing.models.join(', ')):'')+'" placeholder="例如: gpt-5.5, o3" style="width:100%;background:#0f1117;border:1px solid #2a2b3d;color:#e4e4e7;padding:8px 12px;border-radius:6px;font-size:14px;outline:none"></div>'+'<div style="display:flex;gap:10px;justify-content:flex-end"><button onclick="closeKeyModal()" style="background:#2a2b3d;color:#e4e4e7;border:none;padding:8px 20px;border-radius:6px;cursor:pointer">取消</button><button onclick="saveKey('+(isEdit?'\''+esc(existing.alias)+'\'':'null')+')" style="background:#7c8aff;color:#fff;border:none;padding:8px 20px;border-radius:6px;cursor:pointer">保存</button></div>'+'</div>';}
+function closeKeyModal(){var m=document.getElementById('keyModal');if(m)m.remove();}
+function saveKey(editAlias){var alias=document.getElementById('mAlias').value.trim();var prov=document.getElementById('mProvider').value.trim();var modelsStr=document.getElementById('mModels').value.trim();var models=[];if(modelsStr){models=modelsStr.split(',').map(function(s){return s.trim()}).filter(function(s){return s});}if(!alias){alert('别名不能为空');return;}if(editAlias){fetch('/admin/keys/'+encodeURIComponent(editAlias),{method:'PUT',headers:{'Authorization':'Bearer '+savedKey,'Content-Type':'application/json'},body:JSON.stringify({alias:alias,provider:prov,models:models})}).then(function(r){if(!r.ok)return r.json().then(function(d){throw new Error(d.error||'修改失败')});closeKeyModal();loadKeys();}).catch(function(e){alert(e.message);});}else{fetch('/admin/keys',{method:'POST',headers:{'Authorization':'Bearer '+savedKey,'Content-Type':'application/json'},body:JSON.stringify({alias:alias,provider:prov,models:models})}).then(function(r){if(!r.ok)return r.json().then(function(d){throw new Error(d.error||'新增失败')});return r.json();}).then(function(d){closeKeyModal();loadKeys();alert('Key 已创建！请保存完整 Key（仅显示一次）：\n'+d.key);}).catch(function(e){alert(e.message);});}}
+function editKey(alias){fetch('/admin/keys',{headers:{'Authorization':'Bearer '+savedKey}}).then(function(r){return r.json()}).then(function(d){var k=(d.keys||[]).find(function(x){return x.alias===alias});if(k)showKeyModal(k);}).catch(function(e){alert(e.message);});}
+function deleteKey(alias){if(!confirm('确定删除 Key "'+alias+'"？此操作不可恢复。'))return;fetch('/admin/keys/'+encodeURIComponent(alias),{method:'DELETE',headers:{'Authorization':'Bearer '+savedKey}}).then(function(r){if(!r.ok)return r.json().then(function(d){throw new Error(d.error||'删除失败')});loadKeys();}).catch(function(e){alert(e.message);});}
 </script>
 </body>
 </html>`
